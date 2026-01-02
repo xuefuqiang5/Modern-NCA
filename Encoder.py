@@ -20,25 +20,28 @@ class PeriodicEmbedding(nn.Module):
 class PLREncoder(nn.Module): 
     def __init(self, d_in, n_freq, d_embedding, freq_init_scale=0.1): 
         super().__init__()
-        self.periodic_embedding = PeriodicEmbedding(d_in, n_freq)
+        self.periodic_embedding = PeriodicEmbedding(d_in, n_freq, freq_init_scale)
         self.linear = nn.Linear(n_freq * 2, d_embedding)
+        self.d_out = d_embedding
     
     def forward(self, x): 
         x = self.periodic_embedding(x)
         return self.linear(x)
 
 class FeatureEncoder(nn.Module): 
-    def __init__(self, n_num_features, cat_cardinalitics, d_embedding, plr_freq=48, is_embedding=True):
+    def __init__(self, n_num_features, cat_cardinalitics, d_num_embedding, d_cat_embedding, plr_freq=48, is_embedding=True):
         super().__init__()
         # plr embedding: x -> [x, sin(wx), cos(wx)] -> Linear -> ReLU
-        self.plr = PLREncoder(n_num_features, plr_freq, d_embedding)
+        self.plr = PLREncoder(n_num_features, plr_freq, d_num_embedding)
         self.is_embedding = is_embedding
         offset = torch.Tensor([0] + cat_cardinalitics[:-1]).cumsum(0)
         self.register_buffer("offset", offset)
-        if is_embedding:
-            self.embedding = nn.Embedding(sum(cat_cardinalitics), d_embedding)
         self.total_dim = sum(cat_cardinalitics)
-        self.d_out = n_num_features * plr_freq + (len(cat_cardinalitics) * d_embedding)
+        if is_embedding:
+            self.embedding = nn.Embedding(sum(cat_cardinalitics), d_cat_embedding)
+            self.d_out = d_num_embedding * n_num_features + len(cat_cardinalitics) * d_cat_embedding
+        else: 
+            self.d_out = d_num_embedding * n_num_features + sum(cat_cardinalitics) 
 
     def forward(self, x_cat, x_num): 
         if self.is_embedding: 
