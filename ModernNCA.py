@@ -4,60 +4,20 @@ from .Encoder import FeatureEncoder
 from .Block import Block
 from torch.utils.data import default_collate
 from einops import rearrange, reduce, repeat
+
 def SNS(dataset, sampling_rate=0.3):
-    """
-    针对 PyTorch Dataset 的随机邻域采样 (SNS)
-    
-    Args:
-        dataset: 实现了 __getitem__ 返回 (x_cat, x_num, y) 的 Dataset
-        sampling_rate (float): 采样比例
-        
-    Returns:
-        x_cat_sub (Tensor): 采样后的类别特征 [M, ...]
-        x_num_sub (Tensor): 采样后的数值特征 [M, ...]
-        y_sub (Tensor): 采样后的标签 [M, ...]
-        indices (Tensor): 对应的索引 [M]
-    """
-    # 1. 获取数据集长度
     N = len(dataset)
     M = int(N * sampling_rate)
-    
-    # 2. 生成随机索引 (通常 Dataset 索引在 CPU 上处理)
-    # 这里的 indices 是乱序的
     indices = torch.randperm(N)[:M]
-    
-    # 3. 提取数据
-    # 情况 A: 如果你的 Dataset 比较简单，数据都在内存里，这种列表推导式最通用
     raw_samples = [dataset[i] for i in indices]
-    
-    # 4. 堆叠 (Collate)
-    # raw_samples 是一个 list: [(x_cat1, x_num1, y1), (x_cat2, x_num2, y2), ...]
-    # default_collate 会把它转换成: (Batch_x_cat, Batch_x_num, Batch_y)
-    # 且会自动处理 Tensor 堆叠和设备放置（默认 CPU Tensor）
     batch = default_collate(raw_samples)
-    
-    # 解包
     x_cat_sub, x_num_sub, y_sub = batch
-    
-    # 如果希望数据直接在 GPU 上（假设 dataset 本身是在 CPU 的）
-    # 你可以在这里加 .cuda() 或者在外部处理
-    # x_cat_sub = x_cat_sub.to(device) ...
-    
     return x_cat_sub, x_num_sub, y_sub, indices
 
-# ==========================================
-# 优化版：如果你使用的是 TensorDataset
-# ==========================================
 def SNS_fast(dataset, sampling_rate=0.3):
-    """
-    如果 dataset 是 torch.utils.data.TensorDataset 或者是全量数据预加载在内存中的自定义 Dataset，
-    直接切片比循环快得多。
-    """
     N = len(dataset)
     M = int(N * sampling_rate)
     
-    # 假设 dataset 内部存储了 tensors，且能在 GPU 上直接生成索引
-    # 尝试获取 device，如果没有则默认为 cpu
     try:
         device = dataset.tensors[0].device 
     except AttributeError:
@@ -65,17 +25,13 @@ def SNS_fast(dataset, sampling_rate=0.3):
         
     indices = torch.randperm(N, device=device)[:M]
     
-    # TensorDataset 支持直接访问 .tensors 属性
-    # 这样避免了 Python for 循环的开销
     if hasattr(dataset, 'tensors'):
-        # dataset.tensors 通常是 tuple (all_x_cat, all_x_num, all_y)
         x_cat_sub = dataset.tensors[0][indices]
         x_num_sub = dataset.tensors[1][indices]
         y_sub     = dataset.tensors[2][indices]
         return x_cat_sub, x_num_sub, y_sub, indices
     
     else:
-        # 如果不是 TensorDataset，回退到通用方法
         return SNS(dataset, sampling_rate)
 
 def get_dist(x, sub_set, metric='euclidean'):
@@ -127,17 +83,28 @@ class ModernNCA(nn.Module):
         ])
         self.entire = entire
         self.sampling_rate = sampling_rate
-    def forward(self, x_cat, x_num): 
-        sub_x_num, sub_x_cat, sub_y, indics = SNS(self.entire, self.sampling_rate)
+def forward(self, x_cat, x_num): 
+        if self.training:
+            sub_x_cat, sub_x_num, sub_y, indics = SNS(self.entire, self.sampling_rate)
+        else:
+            sub_x_cat, sub_x_num, sub_y = self.entire[0], self.entire[1], self.entire[2]
+        device = x_cat.device
+        sub_x_num = sub_x_num.to(device)
+        sub_x_cat = sub_x_cat.to(device)
+        sub_y = sub_y.to(device)
+
+        # 3. 编码 Query (当前输入) 和 Support (参考集)
         x = self.encoder(x_cat, x_num)
-        sub_x = self.encoder(sub_x_num, sub_x_cat)
-        sub_x.to(x_cat.device)
+        sub_x = self.encoder(sub_x_cat, sub_x_num)
+        
         for l in self.layers: 
             x = l(x)
             sub_x = l(sub_x)
+            
         metric = get_dist(x, sub_x)
-        # alpha.size = [batch_size, sub_y.size]
-        alpha = nn.functional.softmax(-metric, dim=-1)
+        
+        alpha = nn.functional.softmax(-(metric**2), dim=-1)
+        
         sub_y = rearrange(sub_y, "w -> 1 w")
+        
         return torch.sum(alpha * sub_y, dim=-1)
-
