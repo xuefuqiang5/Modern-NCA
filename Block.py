@@ -5,27 +5,18 @@ import torch.functional as F
 class Block(nn.Module):
     def __init__(
         self,
-        in_dim: int,
-        hidden_dim: int,
-        out_dim: int,
+        d_in: int,
+        d: int,
         dropout: float = 0.5,
-        is_batch_normalization: bool = True
     ):
         super().__init__()
 
-        if is_batch_normalization: 
-            self.nor = nn.BatchNorm1d(in_dim)
-        else: 
-            self.nor = nn.LayerNorm(in_dim) 
-        self.fc1 = nn.Linear(in_dim, hidden_dim)
-        self.relu = nn.ReLU()
-        self.dropout = nn.Dropout(dropout)
-        self.fc2 = nn.Linear(hidden_dim, out_dim)
-
+        self.block = nn.Sequential(
+            nn.BatchNorm1d(d_in),
+            nn.Linear(d_in, d),
+            nn.ReLU(inplace=True),
+            nn.Dropout(dropout),
+            nn.Linear(d, d_in)
+        )
     def forward(self, x):
-        x = self.nor(x)
-        x = self.fc1(x)
-        x = self.relu(x)
-        x = self.dropout(x)
-        x = self.fc2(x)
-        return x
+        return self.block(x)
