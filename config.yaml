@@ -1,0 +1,17 @@
+model:
+  n_layers: [128, 256, 128]
+  d_cat_embedding: 32
+  d_num_embedding: 32
+  n_freq: 48
+algorithm:
+  sampling_rate: 0.3
+  scale: 0.1
+  metric: "euclidean"
+train:
+  batch_size: 64
+  epochs: 100
+  lr: 1.0e-4
+  seed: 42
+  tempature: 100.0
+data:
+  data_path: "./data/dataset.csv"
